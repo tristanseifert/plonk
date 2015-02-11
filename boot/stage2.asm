@@ -35,7 +35,8 @@ ParamBase					EQU 0xF000
 
 SelectedPartition			EQU ParamBase+0x0000 ; index of MBR, 0-3
 BootablePartitions			EQU ParamBase+0x0001 ; Number of bootable partitions.
-BootPartMap					EQU	ParamBase+0x0002 ; 32 bytes per partition, string
+PartitionFlags				EQU ParamBase+0x0002 ; One byte per partition
+BootPartMap					EQU	ParamBase+0x0006 ; 32 bytes per partition, string
 
 SectorBuffer_Offset			EQU	0xF800 ; 2K buffer for sectors
 SectorBuffer_Segment		EQU 0x0000
@@ -99,7 +100,8 @@ ParseMBR:
 	xor		edx, edx
 	mov		dl, byte [BootablePartitions]
 
-	shl		dx, 0x6
+	; Clear the flags field
+	mov		byte [ds:PartitionFlags+edx], 0x00
 
 	; Is it a FAT partition?
 ;	cmp		al, 0x06 ; FAT16
@@ -109,9 +111,12 @@ ParseMBR:
 	cmp		al, 0x0C ; FAT32 with LBA
 	je		.ParseMBR_FAT
 
+	; Multiply by 32 for the string table
+	shl		dx, 0x6
+
 	; Write string to the array.
-	mov		dword [ds:BootPartMap+edx], 'Type'
-	mov		dword [ds:BootPartMap+edx+4], ' 0x'
+	mov		dword [ds:BootPartMap+edx], 'Part'
+	mov		dword [ds:BootPartMap+edx+4], 'itio'
 
 	; Increment the bootable partition count
 	inc		byte [BootablePartitions]
@@ -127,7 +132,7 @@ ParseMBR:
 	push	dx
 
 	; Read the first sector, then display the volume name from it
-	mov		eax, [fs:bx+8]
+	mov		eax, [fs:bx+8] ; get start LBA from MBR
 	mov		[INT13_LoadPacket+8], eax
 
 	; Attempt to read the sectors of the loader
@@ -136,8 +141,22 @@ ParseMBR:
 	mov		dl, byte [gs:DataStruct_BootDrive]
 	int		0x13
 
+	; Get array offset back
+	mov dx, word [ss:esp]
+
+	; Check for the 'PLNK' string at offset 0x60
+	mov		ebx, dword [ds:SectorBuffer_Offset+0x60]
+	cmp		ebx, 0x4B4E4C50
+	jne		.genericFAT
+
+	; Set the "Plonk Bootable" flag
+	or		dword [ds:PartitionFlags+edx], 0x80
+
+.genericFAT:
 	; Copy partiton label from ds:esi -> es:edi
 	pop		dx
+	shl		dx, 0x6
+
 	cld
 
 	mov		di, BootPartMap
@@ -176,11 +195,11 @@ MainMenu:
 	mov		ah, 0x01
 	mov		cx, 0x2607
 	int		0x10
-	
+
 	; Print title
-	mov		bp, MsgLoading
+	mov		bp, MsgTitle
 	mov		cx, 24
-	mov		dx, $011C
+	mov		dx, 0x011C
 	call	PrintString
 
 	; Draw content box holder thing
@@ -189,12 +208,12 @@ MainMenu:
 	; Print advice
 	mov		bp, MsgAdvice1
 	mov		cx, 46
-	mov		dx, $1511
+	mov		dx, 0x1511
 	call	PrintString
 
 	mov		bp, MsgAdvice2
 	mov		cx, 38
-	mov		dx, $1615
+	mov		dx, 0x1615
 	call	PrintString
 
 	; Are there any bootable partitions?
@@ -221,20 +240,11 @@ MainMenu:
 	cmp		ah, 0x50
 	je		.downArrow
 
-	; Was it return?
+	; Was it the enter key?
 	cmp		ah, 0x1C
-	je		.return
+	je		BootPartition
 
 	jmp		MainMenu
-
-; There are no bootable partitions.
-.noBootablePartitions:
-	mov		bp, MsgNoPartitions
-	mov		cx, 42
-	mov		dx, $0B13
-	call	PrintString
-
-	jmp		.waitForKeypress
 
 ; Process an up arrow press.
 .upArrow:
@@ -258,8 +268,86 @@ MainMenu:
 	add		byte [SelectedPartition], 0x01
 	jmp		MainMenu
 
-; Boot the partition
-.return:
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Displays a message that there are no bootable partitions, then waits for the
+; user to press CTRL+ALT+DEL.
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.noBootablePartitions:
+	mov		bp, MsgNoPartitions
+	mov		cx, 42
+	mov		dx, 0x0B13
+	call	PrintString
+
+	sti
+	jmp		$
+
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Boots the selected partition. Determines whether it is a Plonk partition, or
+; should be chainloaded.
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+BootPartition:
+	; Get the index of the partition
+	xor		eax, eax
+	mov		al, byte [SelectedPartition]
+
+	; Is it a Plonk partition?
+	mov		bl, byte [ds:PartitionFlags+eax]
+	and		bl, 0x80
+	jne		BootPlonk
+
+	; If not, chainload it.
+	mov		ax, 0x0600
+	mov		fs, ax
+
+	; Add the selected partition's index to it
+	mov		bx, 0x1BE
+	shl		ax, 4
+	add		bx, ax
+
+	; Read LBA of the partition
+	mov		eax, dword [fs:bx+8] ; get start LBA from MBR
+	mov		dword [INT13_LoadPacket+8], eax
+
+	; Write the segment and offset that chainloading is at
+	mov		word [INT13_LoadPacket+4], 0x7c00
+	mov		word [INT13_LoadPacket+6], 0x0000
+
+	; Attempt to read the sectors of the loader
+	mov		si, INT13_LoadPacket
+	mov		ah, 0x42
+	mov		dl, byte [gs:DataStruct_BootDrive]
+	int		0x13
+
+	; Reset segments
+	xor		ax, ax
+	mov		ds, ax
+	mov		es, ax
+	mov		fs, ax
+	mov		gs, ax
+
+	; Read the sector
+	jmp		0x0000:0x7c00
+
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Attempts to boot Plonk from the partition in EAX.
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+BootPlonk:
+	; Display the "loading kernel" message
+	push	ax
+
+	; Clear screen
+	mov		ax, 0x0003
+	int		0x10
+
+	; Print string
+	mov		bp, MsgLoadingKernel
+	mov		cx, 20
+	xor		dx, dx
+	call	PrintString
+
+	pop		ax
+
+	jmp		$
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Renders a menu, where BP is a pointer to a list of strings, and AL contains
@@ -284,7 +372,7 @@ RenderMenu:
 	push	bx
 
 	; Regular colour
-	mov		bl, $07
+	mov		bl, 0x07
 
 	; If ToHighlight == Current, highlight the row.
 	sub		al, dl
@@ -405,39 +493,39 @@ RenderMenu_FillSpaceAttr:
 DrawContentBox:
 	; Draw left edge at (4, 4)
 	xor		bh, bh
-	mov		dx, $0404
+	mov		dx, 0x0404
 
 	mov		ah, 0x02
 	int		0x10
 
 	mov		al, 0xC9
-	mov		bx, 0x0007
+	mov		bx, 0x000F
 	mov		cx, 0x0001
 
 	mov		ah, 0x09
 	int		0x10
 	; Draw top border, starting at (5, 4)
 	xor		bh, bh
-	mov		dx, $0405
+	mov		dx, 0x0405
 
 	mov		ah, 0x02
 	int		0x10
 
 	mov		al, 0xCD
-	mov		bx, 0x0007
+	mov		bx, 0x000F
 	mov		cx, 0x0046
 
 	mov		ah, 0x09
 	int		0x10
 	; Draw right edge at (76, 4)
 	xor		bh, bh
-	mov		dx, $044B
+	mov		dx, 0x044B
 
 	mov		ah, 0x02
 	int		0x10
 
 	mov		al, 0xBB
-	mov		bx, 0x0007
+	mov		bx, 0x000F
 	mov		cx, 0x0001
 
 	mov		ah, 0x09
@@ -446,39 +534,39 @@ DrawContentBox:
 
 	; Draw left edge at (4, 19)
 	xor		bh, bh
-	mov		dx, $1304
+	mov		dx, 0x1304
 
 	mov		ah, 0x02
 	int		0x10
 
 	mov		al, 0xC8
-	mov		bx, 0x0007
+	mov		bx, 0x000F
 	mov		cx, 0x0001
 
 	mov		ah, 0x09
 	int		0x10
 	; Draw top border, starting at  (5, 19)
 	xor		bh, bh
-	mov		dx, $1305
+	mov		dx, 0x1305
 
 	mov		ah, 0x02
 	int		0x10
 
 	mov		al, 0xCD
-	mov		bx, 0x0007
+	mov		bx, 0x000F
 	mov		cx, 0x0046
 
 	mov		ah, 0x09
 	int		0x10
 	; Draw right edge at (76, 19)
 	xor		bh, bh
-	mov		dx, $134B
+	mov		dx, 0x134B
 
 	mov		ah, 0x02
 	int		0x10
 
 	mov		al, 0xBC
-	mov		bx, 0x0007
+	mov		bx, 0x000F
 	mov		cx, 0x0001
 
 	mov		ah, 0x09
@@ -493,26 +581,26 @@ DrawContentBox:
 
 	; Draw the left edge
 	mov		dh, byte [.currentY]
-	mov		dl, $04
+	mov		dl, 0x04
 	xor		bh, bh
 	mov		ah, 0x02
 	int		0x10
 
 	mov		al, 0xBA
-	mov		bx, 0x0007
+	mov		bx, 0x000F
 	mov		cx, 0x0001
 	mov		ah, 0x09
 	int		0x10
 
 	; Draw the right edge
 	mov		dh, byte [.currentY]
-	mov		dl, $4B
+	mov		dl, 0x4B
 	xor		bh, bh
 	mov		ah, 0x02
 	int		0x10
 
 	mov		al, 0xBA
-	mov		bx, 0x0007
+	mov		bx, 0x000F
 	mov		cx, 0x0001
 	mov		ah, 0x09
 	int		0x10
@@ -585,15 +673,6 @@ CollectVideoInfo:
 ; the BIOS, then the Fast A20 gate.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 EnableA20:
-	mov		ax, 0x2401
-	int		0x15
-	ret
-	
-	; Check if A20 is enabled
-	call	CheckA20
-	test	ax, ax
-	jne		.A20AlreadyOn
-
 	; Use the BIOS to enable the A20 gate
 	mov		ax, 0x2401
 	int		0x15
@@ -604,7 +683,7 @@ EnableA20:
 	test	al, 2
 	jnz		.A20AlreadyOn
 
-	; If not, enable it.
+	; If not, enable it using the "Fast A20" method
 	or		al, 2
 	and		al, 0xfe
 	out		0x92, al
@@ -615,51 +694,59 @@ EnableA20:
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Checks if the A20 gate is enabled. AX is 0 if it is disabled, 1 otherwise.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-CheckA20:
-	; ES = 0x0000
-	xor		ax, ax
-	mov		es, ax
-
-	; DS = 0xffff
-	not		ax
-	mov		ds, ax
-
-	; Check the signatures
-	mov		di, 0x0500
-	mov		si, 0x0510
-
-	; Read 0x0000:0x0500
-	mov		al, byte [es:di]
-	push	ax
-
-	; Read 0xffff:0x0510
-	mov		al, byte [ds:si]
-	push	ax
-
-	; Write two different values to them
-	mov		byte [es:di], 0x00
-	mov		byte [ds:si], 0xFF
-
-	; Are they the same values?
-	cmp		byte [es:di], 0xFF
-
-	; Write back the old values
-	pop		ax
-	mov		byte [ds:si], al
-
-	pop		ax
-	mov		byte [es:di], al
-
-	; Clear AX: if the values are the same, return
-	xor		ax, ax
-	je		.done
-
-	; Otherwise, they're not
-	mov		ax, 1
-
-.done:
-	ret
-
+;CheckA20:
+;	; Save the segments we are about to mess with
+;	push	fs
+;	push	es
+;
+;	; ES = 0x0000
+;	xor		ax, ax
+;	mov		es, ax
+;
+;	; DS = 0xffff
+;	not		ax
+;	mov		fs, ax
+;
+;	; Check the signatures
+;	mov		di, 0x0500
+;	mov		si, 0x0510
+;
+;	; Read 0x0000:0x0500
+;	mov		al, byte [es:di]
+;	push	ax
+;
+;	; Read 0xffff:0x0510
+;	mov		al, byte [fs:si]
+;	push	ax
+;
+;	; Write two different values to them
+;	mov		byte [es:di], 0x00
+;	mov		byte [fs:si], 0xFF
+;
+;	; Are they the same values?
+;	cmp		byte [es:di], 0xFF
+;
+;	; Write back the old values
+;	pop		ax
+;	mov		byte [fs:si], al
+;
+;	pop		ax
+;	mov		byte [es:di], al
+;
+;	; Clear AX: if the values are the same, return
+;	xor		ax, ax
+;	je		.done
+;
+;	; Otherwise, they're not
+;	mov		al, 1
+;
+;.done:
+;	; Pop the segments we messed with
+;	pop		es
+;	pop		fs
+;
+;	ret
+;
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Enters Unreal Mode.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -731,14 +818,22 @@ INT13_LoadPacket:
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Message strings
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-MsgLoading: ; 24
+MsgTitle: ; 24
 	db		0x70, "The Plonk Bootloader 1.0"
 
 MsgAdvice1: ; 46
 	db		0x07, "Use ", 0x18, " or ", 0x19, " keys to select an operating system."
-
 MsgAdvice2: ; 38
 	db		0x07, "Press ENTER to boot, or O for options."
 
 MsgNoPartitions: ; 42
 	db		0x04, "This disk contains no bootable partitions."
+
+MsgLoadingKernel: ; 20
+	db		0x07, "Loading Plonk kernel"
+MsgLoadingRamFS: ; 23
+	db		0x07, "Loading initial modules"
+MsgLoadingParsing: ; 18
+	db		0x07, "Parsing Executables"
+MsgLoadingBooting: ; 14
+	db		0x07, "Booting kernel"
