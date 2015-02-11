@@ -26,7 +26,7 @@ DataStruct_BootDrive		EQU 0x0000
 DataStruct_BootPartLBA		EQU 0x0001
 
 DataStruct_LowMem			EQU 0x0005 ; 1M to 16M, in 1KB blocks
-DataStruct_HighMem			EQU 0x0007 ; Above 16M, in 64K blocks
+DataStruct_HighMem			EQU 0x0009 ; Above 16M, in 64K blocks
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Various variables that hold the state of the bootloader.
@@ -50,11 +50,16 @@ entry:
 	; Set up stack
 	mov		sp, 0xF000
 
+	; GS points to the info structure
+	mov		ax, DataStruct_Segment
+	mov		gs, ax
+
 	; Initialise some state
 	xor		ax, ax
 	mov		word [SelectedPartition], ax
 
-	; Enter Unreal Mode™
+	; Enable A20 gate, then enter Unreal Mode™
+	call	EnableA20
 	call	EnterUnrealMode
 
 	; Collect a bunch of information that the kernel likes
@@ -62,7 +67,7 @@ entry:
 	call	CollectVideoInfo
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-; Parses the MBR
+; Parses the MBR for partitions.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ParseMBR:
 	; Set up FS to point to the MBR loader
@@ -99,8 +104,10 @@ ParseMBR:
 	; Is it a FAT partition?
 ;	cmp		al, 0x06 ; FAT16
 ;	je		.doFATPartition
-	cmp		al, 0x0B ; FAT32
-	je		.doFATPartition
+	cmp		al, 0x0B ; FAT32 with CHS
+	je		.ParseMBR_FAT
+	cmp		al, 0x0C ; FAT32 with LBA
+	je		.ParseMBR_FAT
 
 	; Write string to the array.
 	mov		dword [ds:BootPartMap+edx], 'Type'
@@ -112,7 +119,10 @@ ParseMBR:
 	; Check the next partition.
 	jmp		.checkNext
 
-.doFATPartition:
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Reads the volume label out of a FAT32 partition.
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.ParseMBR_FAT:
 	; Push array offset
 	push	dx
 
@@ -540,6 +550,27 @@ PrintString:
 ; to the overall size of memory.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 CollectMemoryInfo:
+	; Collect info about the total amount of memory installed
+	xor		eax, eax
+	xor		ebx, ebx
+
+	mov		ax, 0xe881
+	int		0x15
+
+	; Did the BIOS output on EAX/EBX?
+	test	eax, eax
+	jnz		.outputEAX
+
+	; If not, ECX and EDX should be swapped to EAX and EBX.
+	xchg	eax, ecx
+	xchg	ebx, edx
+
+.outputEAX:
+	mov		dword [gs:DataStruct_LowMem], eax
+	mov		dword [gs:DataStruct_HighMem], ebx
+
+	;
+
 	ret
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -547,6 +578,86 @@ CollectMemoryInfo:
 ; version, and information about all available modes.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 CollectVideoInfo:
+	ret
+
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Checks if the A20 line is enabled, and if not, it tries to enable it through
+; the BIOS, then the Fast A20 gate.
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+EnableA20:
+	mov		ax, 0x2401
+	int		0x15
+	ret
+	
+	; Check if A20 is enabled
+	call	CheckA20
+	test	ax, ax
+	jne		.A20AlreadyOn
+
+	; Use the BIOS to enable the A20 gate
+	mov		ax, 0x2401
+	int		0x15
+	jnc		.A20AlreadyOn
+
+	; Check if the A20 gate is enabled
+	in		al, 0x92
+	test	al, 2
+	jnz		.A20AlreadyOn
+
+	; If not, enable it.
+	or		al, 2
+	and		al, 0xfe
+	out		0x92, al
+
+.A20AlreadyOn:
+	ret
+
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Checks if the A20 gate is enabled. AX is 0 if it is disabled, 1 otherwise.
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+CheckA20:
+	; ES = 0x0000
+	xor		ax, ax
+	mov		es, ax
+
+	; DS = 0xffff
+	not		ax
+	mov		ds, ax
+
+	; Check the signatures
+	mov		di, 0x0500
+	mov		si, 0x0510
+
+	; Read 0x0000:0x0500
+	mov		al, byte [es:di]
+	push	ax
+
+	; Read 0xffff:0x0510
+	mov		al, byte [ds:si]
+	push	ax
+
+	; Write two different values to them
+	mov		byte [es:di], 0x00
+	mov		byte [ds:si], 0xFF
+
+	; Are they the same values?
+	cmp		byte [es:di], 0xFF
+
+	; Write back the old values
+	pop		ax
+	mov		byte [ds:si], al
+
+	pop		ax
+	mov		byte [es:di], al
+
+	; Clear AX: if the values are the same, return
+	xor		ax, ax
+	je		.done
+
+	; Otherwise, they're not
+	mov		ax, 1
+
+.done:
 	ret
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
