@@ -31,8 +31,8 @@ Stage2_Offset				EQU 0x8000
 Entry:
 	jmp		short .init
 
-; Align to 0x0040 for the FAT sector
-	times 64-($-$$) db 0
+; Align to 0x0060 for the FAT sector
+	times 96-($-$$) db 0
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Actual entry point, after the BPB. This is in charge of loading the second

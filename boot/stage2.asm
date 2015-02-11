@@ -34,7 +34,11 @@ DataStruct_HighMem			EQU 0x0007 ; Above 16M, in 64K blocks
 ParamBase					EQU 0xF000
 
 SelectedPartition			EQU ParamBase+0x0000 ; index of MBR, 0-3
-BootPartMap					EQU	ParamBase+0x0001 ; 32 bytes per partition, string
+BootablePartitions			EQU ParamBase+0x0001 ; Number of bootable partitions.
+BootPartMap					EQU	ParamBase+0x0002 ; 32 bytes per partition, string
+
+SectorBuffer_Offset			EQU	0xF800 ; 2K buffer for sectors
+SectorBuffer_Segment		EQU 0x0000
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Entry point from first stage bootloader.
@@ -47,13 +51,108 @@ entry:
 	mov		sp, 0xF000
 
 	; Initialise some state
-	mov		byte [SelectedPartition], 0
+	xor		ax, ax
+	mov		word [SelectedPartition], ax
 
 	; Enter Unreal Mode™
 	call	EnterUnrealMode
 
 	; Collect a bunch of information that the kernel likes
 	call	CollectMemoryInfo
+	call	CollectVideoInfo
+
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Parses the MBR
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ParseMBR:
+	; Set up FS to point to the MBR loader
+	mov		ax, 0x0600
+	mov		fs, ax
+
+	; Check four MBR entries
+	mov		cx, 0x4
+	mov		bx, 0x1BE
+
+.checkPartition:
+	; read the partition type: if it is nonzero, this partition is good
+	mov		al, byte [fs:bx+4]
+	test	al, al
+	jnz		.foundPartition
+
+.checkNext:
+	; check the next partition
+	add		bx, 0x10
+	loop	.checkPartition
+
+	; Now, render the main menu.
+	jmp		MainMenu
+
+
+; We found a partition, whose MBR entry is being pointed to by FS:BX.
+.foundPartition:
+	; Get the offset in the array.
+	xor		edx, edx
+	mov		dl, byte [BootablePartitions]
+
+	shl		dx, 0x6
+
+	; Is it a FAT partition?
+;	cmp		al, 0x06 ; FAT16
+;	je		.doFATPartition
+	cmp		al, 0x0B ; FAT32
+	je		.doFATPartition
+
+	; Write string to the array.
+	mov		dword [ds:BootPartMap+edx], 'Type'
+	mov		dword [ds:BootPartMap+edx+4], ' 0x'
+
+	; Increment the bootable partition count
+	inc		byte [BootablePartitions]
+
+	; Check the next partition.
+	jmp		.checkNext
+
+.doFATPartition:
+	; Push array offset
+	push	dx
+
+	; Read the first sector, then display the volume name from it
+	mov		eax, [fs:bx+8]
+	mov		[INT13_LoadPacket+8], eax
+
+	; Attempt to read the sectors of the loader
+	mov		si, INT13_LoadPacket
+	mov		ah, 0x42
+	mov		dl, byte [gs:DataStruct_BootDrive]
+	int		0x13
+
+	; Copy partiton label from ds:esi -> es:edi
+	pop		dx
+	cld
+
+	mov		di, BootPartMap
+	add		di, dx
+
+	mov		si, SectorBuffer_Offset+0x047
+
+	; Copy 11 bytes
+	mov		eax, dword [ds:si]
+	mov		dword [ds:di], eax
+
+	mov		eax, dword [ds:si+4]
+	mov		dword [ds:di+4], eax
+
+	mov		ax, word [ds:si+8]
+	mov		word [ds:di+8], ax
+
+	mov		al, byte [ds:si+10]
+	mov		byte [ds:di+10], al
+
+	; Increment the bootable partition count
+	inc		byte [BootablePartitions]
+
+	; Check the next partition.
+	jmp		.checkNext
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Renders the main menu.
@@ -74,6 +173,9 @@ MainMenu:
 	mov		dx, $011C
 	call	PrintString
 
+	; Draw content box holder thing
+	call	DrawContentBox
+
 	; Print advice
 	mov		bp, MsgAdvice1
 	mov		cx, 46
@@ -85,16 +187,18 @@ MainMenu:
 	mov		dx, $1615
 	call	PrintString
 
+	; Are there any bootable partitions?
+	mov		ah, [BootablePartitions]
+	test	ah, ah
+	jz		.noBootablePartitions
+
 	; Display each of the bootable entries
-	mov		bp, MsgLoading ; BootPartMap
+	mov		bp, BootPartMap
 	mov		al, [SelectedPartition]
-	mov		ah, 4
 	mov		bh, 32
 	call	RenderMenu
 
-	; Draw content box holder thing
-	call	DrawContentBox
-
+.waitForKeypress:
 	; wait for a keypress
 	xor		ah, ah
 	int		0x16
@@ -107,19 +211,45 @@ MainMenu:
 	cmp		ah, 0x50
 	je		.downArrow
 
+	; Was it return?
+	cmp		ah, 0x1C
+	je		.return
+
 	jmp		MainMenu
+
+; There are no bootable partitions.
+.noBootablePartitions:
+	mov		bp, MsgNoPartitions
+	mov		cx, 42
+	mov		dx, $0B13
+	call	PrintString
+
+	jmp		.waitForKeypress
 
 ; Process an up arrow press.
 .upArrow:
+	; Are we at the top?
+	cmp		byte [SelectedPartition], 0x00
+	je		MainMenu
+
+	; If not, move up one space.
 	sub		byte [SelectedPartition], 0x01
-	and		byte [SelectedPartition], 0x03
 	jmp		MainMenu
 
 ; Process an down arrow press.
 .downArrow:
+	; Are we at the bottom?
+	mov		al, byte [BootablePartitions]
+	dec		al
+	cmp		byte [SelectedPartition], al
+	je		MainMenu
+
+	; If not, go down one entry.
 	add		byte [SelectedPartition], 0x01
-	and		byte [SelectedPartition], 0x03
 	jmp		MainMenu
+
+; Boot the partition
+.return:
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Renders a menu, where BP is a pointer to a list of strings, and AL contains
@@ -413,6 +543,13 @@ CollectMemoryInfo:
 	ret
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Collects information about the available VBE information, such as the VBE
+; version, and information about all available modes.
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+CollectVideoInfo:
+	ret
+
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Enters Unreal Mode.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 EnterUnrealMode:
@@ -464,6 +601,23 @@ EnterUnrealMode:
 .gdt_end:
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Read packet structure for INT13 extensions.
+;
+; 0	1	size of packet (16 bytes)
+; 1	1	always 0
+; 2	2	number of sectors to transfer (max 127 on some BIOSes)
+; 4	4	-> transfer buffer (16 bit segment:16 bit offset) (see note #1)
+; 8	4	starting LBA
+;12	4	used for upper part of 48 bit LBAs
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+INT13_LoadPacket:
+	db	16, 0
+	dw	4
+	dw	SectorBuffer_Offset, SectorBuffer_Segment
+	dd	0
+	dd	0
+
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Message strings
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 MsgLoading: ; 24
@@ -474,3 +628,6 @@ MsgAdvice1: ; 46
 
 MsgAdvice2: ; 38
 	db		0x07, "Press ENTER to boot, or O for options."
+
+MsgNoPartitions: ; 42
+	db		0x04, "This disk contains no bootable partitions."

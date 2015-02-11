@@ -12,7 +12,7 @@ dd conv=notrunc if=boot/out/mbr.bin of=./disk.img count=446 bs=1
 
 # Copy stage 1 header, then the code
 dd conv=notrunc if=boot/out/stage1.bin of=./disk.img count=3 bs=1 seek=512
-dd conv=notrunc if=boot/out/stage1.bin of=./disk.img count=448 bs=1 seek=576 skip=64
+dd conv=notrunc if=boot/out/stage1.bin of=./disk.img count=448 bs=1 seek=608 skip=96
 
 # Copy stage 2 (at sector 2 of FAT)
 dd conv=notrunc if=boot/out/stage2.bin of=./disk.img count=2048 bs=1 seek=1536
