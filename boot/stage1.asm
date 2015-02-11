@@ -21,6 +21,9 @@ DataStruct_Size				EQU 0xFFFF
 DataStruct_BootDrive		EQU 0x0000
 DataStruct_BootPartLBA		EQU 0x0001
 
+; Segment of the stage 2 loader
+Stage2_Segment				EQU 0x0800
+
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Entry in the FAT header
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -41,18 +44,17 @@ Entry:
 	mov		ds, ax
 	mov		es, ax
 
-	; Set up the stack (256 bytes)
-	mov		ss, ax
-	mov		sp, 0x7f00
-
-	; Set up segment for data struct
-	mov		ax, DataStruct_Segment
-	mov		gs, ax
-
 	; reset cs to be zero as well
 	jmp		0x0000:.stackInit
 
 .stackInit:
+	; Set up the stack (256 bytes)
+	mov		ss, ax
+	mov		sp, 0x7c00
+
+	; Set up segment for data struct
+	mov		ax, DataStruct_Segment
+	mov		gs, ax
 
 	; print the loading message
 	mov		bp, MsgLoading
@@ -65,9 +67,7 @@ Entry:
 LoadStage2:
 	; Write the LBA into the packet
 	mov		eax, dword [gs:DataStruct_BootPartLBA]
-	mov		bl, byte [gs:DataStruct_BootDrive]
-
-	jmp		$
+	add		eax, 2
 	mov		[.loadPacket+8], eax
 
 	; Attempt to read the sectors of the loader
@@ -77,8 +77,19 @@ LoadStage2:
 	int		0x13
 	jc		.diskError
 
+	; Set up segment registers
+	mov		ax, Stage2_Segment
+
+	mov		ds, ax
+	mov		es, ax
+	mov		fs, ax
+	mov		ss, ax
+
+	; Jump to the code.
+	jmp		Stage2_Segment:0x0000
+
+; Prints an error, then waits for keyboard input and retries the read.
 .diskError:
-	; Print the error string
 	mov		bp, EDiskError
 	mov		cx, 34
 	call	PrintString
@@ -103,17 +114,14 @@ LoadStage2:
 .loadPacket:
 	db	16, 0
 	dw	4
-	dw	0x0000, 0x800
+	dw	0x0000, Stage2_Segment
 	dd	0
 	dd	0
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-; Prints the string in ES:BP (length CX bytes) to the screen. Video attributes
-; are in BL.
+; Prints the string in ES:BP (length CX bytes) to the screen.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 PrintString:
-	pusha
-
 	; Video page 0, attribute 0: column 0
 	xor		bx, bx
 	xor		dl, dl
@@ -127,12 +135,9 @@ PrintString:
 
 	mov		ax, 0x1301
 	int		0x10
-	jmp		$
 
 	; increment row
 	inc		byte [.lastYVal]
-
-	popa
 
 	ret
 
@@ -143,17 +148,12 @@ PrintString:
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Message strings
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+;	times 256-($-$$) db 85
 EDiskError: ; 34
 	db		0x47, "Disk Error. Press any key to retry"
 
 MsgLoading: ; 17
 	db		0x07, "Loading Stage2..."
-
-;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-; State
-;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-BootDrive: db 0
-BootLBA: dd	0
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; boot signature

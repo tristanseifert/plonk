@@ -81,8 +81,10 @@ SearchForBootablePartition:
 	; Set up segments for everything else
 	mov		ax, 0x07c0
 	mov		ds, ax
-	mov		es, ax
 	mov		ss, ax
+
+	xor		ax, ax
+	mov		fs, ax
 
 	; find the active partition
 	mov		cx, 0x4
@@ -125,6 +127,12 @@ LoadPartitionBootloader:
 	int		0x13
 	jc		.diskError
 
+	; validate the last two bytes of the boot sector
+	mov		ax, 0xAA55
+	mov		bx, [fs:0x7dfe]
+	cmp		ax, bx
+	jne		.invalidSig
+
 	; Restore the environment: DL: drive, DS:SI MBR entry (adjust segment)
 	pop		bx
 
@@ -137,19 +145,16 @@ LoadPartitionBootloader:
 	xor		ax, ax
 
 	mov		ds, ax
-	mov		es, ax
 	mov		fs, ax
 	mov		ss, ax
 
-	mov		sp, $8000
+	mov		sp, $7c00
 
 	; jump to the code
 	jmp		0x0000:0x7c00
 
-; Called in case of a disk error.
+; Prints an error, and waits for a keypress.
 .diskError:
-
-	; Print the error string
 	mov		bp, EDiskError
 	mov		cx, 34
 	call	PrintString
@@ -162,6 +167,16 @@ LoadPartitionBootloader:
 	pop		bx
 	jmp		LoadPartitionBootloader
 
+; Prints an error if the last two bytes aren't 0x55 and 0xAA.
+.invalidSig:
+	pop		bx
+
+	mov		bp, EInvalidSig
+	mov		cx, 17
+	call	PrintString
+
+	jmp		$
+
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Read packet structure for INT13 extensions.
 ;
@@ -173,18 +188,20 @@ LoadPartitionBootloader:
 ;12	4	used for upper part of 48 bit LBAs
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 .loadPacket:
-	db	16, 0
+	db	0x10, 0
+	
 	dw	1
+	
 	dw	0x7c00, 0x0000
-	dd	0
+
+	dd	0x8badf00d
 	dd	0
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-; Prints the string in ES:BP (length CX bytes) to the screen. Video attributes
-; are in BL.
+; Prints the string in ES:BP (length CX bytes) to the screen.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 PrintString:
-	pusha
+	pushad
 
 	; Video page 0, attribute 0: column 0
 	xor		bx, bx
@@ -203,7 +220,7 @@ PrintString:
 	; increment row
 	inc		byte [.lastYVal]
 
-	popa
+	popad
 
 	ret
 
@@ -219,6 +236,9 @@ ENoBootablePartitions: ; 22
 
 EDiskError: ; 34
 	db		0x47, "Disk Error. Press any key to retry"
+
+EInvalidSig: ; 17
+	db		0x47, "Invalid Signature"
 
 MsgLoading: ; 10
 	db		0x07, "Loading..."
