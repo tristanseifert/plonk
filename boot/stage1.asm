@@ -22,7 +22,8 @@ DataStruct_BootDrive		EQU 0x0000
 DataStruct_BootPartLBA		EQU 0x0001
 
 ; Segment of the stage 2 loader
-Stage2_Segment				EQU 0x0800
+Stage2_Segment				EQU 0x0000
+Stage2_Offset				EQU 0x8000
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Entry in the FAT header
@@ -86,7 +87,7 @@ LoadStage2:
 	mov		ss, ax
 
 	; Jump to the code.
-	jmp		Stage2_Segment:0x0000
+	jmp		Stage2_Segment:Stage2_Offset
 
 ; Prints an error, then waits for keyboard input and retries the read.
 .diskError:
@@ -114,7 +115,7 @@ LoadStage2:
 .loadPacket:
 	db	16, 0
 	dw	4
-	dw	0x0000, Stage2_Segment
+	dw	Stage2_Offset, Stage2_Segment
 	dd	0
 	dd	0
 
