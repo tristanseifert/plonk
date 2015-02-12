@@ -50,6 +50,11 @@ DataStruct_BootPartLBA		EQU 0x0005
 DataStruct_LowMem			EQU 0x0009 ; 1M to 16M, in 1KB blocks
 DataStruct_HighMem			EQU 0x000D ; Above 16M, in 64K blocks
 
+DataStruct_VBEVersion		EQU 0x000D ; 16 bit
+DataStruct_VBEMemory		EQU 0x000F ; Total video memory, in 64K blocks
+DataStruct_VBEOEMStrings	EQU 0x0013 ; Pointer (segment:offset) to strings
+									   ; Three \0-separated strings
+
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Various variables that hold the state of the bootloader.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -879,6 +884,25 @@ CollectMemoryInfo:
 ; version, and information about all available modes.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 CollectVideoInfo:
+	; Get general VBE info
+	mov		ax, 0x4f00
+	mov		di, SectorBuffer_Offset
+	int		0x10
+
+	mov		di, SectorBuffer_Offset
+
+	; Copy version and memory
+	mov		ax, [ds:di+4]
+	mov		word [gs:DataStruct_VBEVersion], ax
+
+	mov		eax, [ds:di+6]
+	mov		dword [gs:DataStruct_VBEOEMStrings], eax
+
+	mov		ax, [ds:di+18]
+	mov		word [gs:DataStruct_VBEMemory], ax
+
+	jmp		$
+
 	ret
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
