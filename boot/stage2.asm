@@ -18,6 +18,8 @@
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Colour_ContentBox			EQU 0x07
 
+Colour_MenuBG				EQU 0x01
+
 Colour_SelectedListItem		EQU 0x70
 Colour_NormalListItem		EQU 0x07
 
@@ -28,6 +30,9 @@ Colour_ErrorText			EQU 0x04
 Colour_TextField			EQU 0x07
 Colour_Titles				EQU 0x70
 
+OptionsMenu_ItemLength		EQU 32
+OptionsMenu_NumItems		EQU 1
+
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Fields in the kernel info structure. It is located at 0x070000 in physical
 ; memory.
@@ -37,21 +42,25 @@ DataStruct_Offset			EQU 0x0000
 DataStruct_Size				EQU 0xFFFF
 
 ; These are offsets within the structure itself
-DataStruct_BootDrive		EQU 0x0000
-DataStruct_BootPartLBA		EQU 0x0001
+DataStruct_BootFlags		EQU 0x0000
 
-DataStruct_LowMem			EQU 0x0005 ; 1M to 16M, in 1KB blocks
-DataStruct_HighMem			EQU 0x0009 ; Above 16M, in 64K blocks
+DataStruct_BootDrive		EQU 0x0004
+DataStruct_BootPartLBA		EQU 0x0005
+
+DataStruct_LowMem			EQU 0x0009 ; 1M to 16M, in 1KB blocks
+DataStruct_HighMem			EQU 0x000D ; Above 16M, in 64K blocks
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Various variables that hold the state of the bootloader.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+StackBase					EQU 0xA000
+
 ParamBase					EQU 0xF000
 
 SelectedPartition			EQU ParamBase+0x0000 ; index of MBR, 0-3
 BootablePartitions			EQU ParamBase+0x0001 ; Number of bootable partitions.
 PartitionFlags				EQU ParamBase+0x0002 ; One byte per partition
-BootPartMap					EQU	ParamBase+0x0006 ; 32 bytes per partition, string
+BootPartMap					EQU	ParamBase+0x0006 ; Up to 32 bytes per partition
 
 SelectedOption				EQU ParamBase+0x0086 ; Currently selected option
 NumberOfOptions				EQU ParamBase+0x0087 ; Number of options
@@ -67,7 +76,7 @@ SectorBuffer_Segment		EQU 0x0000
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 entry:
 	; Set up stack
-	mov		sp, 0xF000
+	mov		sp, StackBase
 
 	; GS points to the info structure
 	mov		ax, DataStruct_Segment
@@ -89,17 +98,23 @@ entry:
 ; Parses the MBR for partitions.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ParseMBR:
-	; Set up FS to point to the MBR loader
-	mov		ax, 0x0600
-	mov		fs, ax
+	; Read the MBR
+	xor		eax, eax
+	mov		dword [INT13_LoadPacket+8], eax
+
+	; Attempt to read the sectors of the loader
+	mov		si, INT13_LoadPacket
+	mov		ah, 0x42
+	mov		dl, byte [gs:DataStruct_BootDrive]
+	int		0x13
 
 	; Check four MBR entries
 	mov		cx, 0x4
-	mov		bx, 0x1BE
+	mov		bx, SectorBuffer_Offset+0x1BE
 
 .checkPartition:
 	; read the partition type: if it is nonzero, this partition is good
-	mov		al, byte [fs:bx+4]
+	mov		al, byte [ds:bx+4]
 	test	al, al
 	jnz		.foundPartition
 
@@ -151,7 +166,7 @@ ParseMBR:
 
 	; Read the first sector, then display the volume name from it
 	mov		eax, [fs:bx+8] ; get start LBA from MBR
-	mov		[INT13_LoadPacket+8], eax
+	mov		dword [INT13_LoadPacket+8], eax
 
 	; Attempt to read the sectors of the loader
 	mov		si, INT13_LoadPacket
@@ -195,6 +210,9 @@ ParseMBR:
 	mov		al, byte [ds:si+10]
 	mov		byte [ds:di+10], al
 
+	; Zero-terminate the string
+	mov		byte [ds:di+11], 0
+
 	; Increment the bootable partition count
 	inc		byte [BootablePartitions]
 
@@ -209,6 +227,11 @@ MainMenu:
 	mov		ax, 0x0003
 	int		0x10
 
+	; Set background colour
+	mov		ah, 0x0b
+	mov		bx, Colour_MenuBG
+	int		0x10
+
 	; Hide Cursor
 	mov		ah, 0x01
 	mov		cx, 0x2607
@@ -216,7 +239,6 @@ MainMenu:
 
 	; Print title
 	mov		bp, MsgTitle
-	mov		cx, 24
 	mov		dx, 0x011C
 	call	PrintString
 
@@ -225,24 +247,21 @@ MainMenu:
 
 	; Print advice
 	mov		bp, MsgAdvice1
-	mov		cx, 46
 	mov		dx, 0x1511
 	call	PrintString
 
 	mov		bp, MsgAdvice2
-	mov		cx, 38
 	mov		dx, 0x1615
 	call	PrintString
 
 	; Are there any bootable partitions?
-	mov		ah, [BootablePartitions]
+	mov		ah, byte [BootablePartitions]
 	test	ah, ah
 	jz		.noBootablePartitions
 
 	; Display each of the bootable entries
 	mov		bp, BootPartMap
-	mov		al, [SelectedPartition]
-	mov		bh, 32
+	mov		al, byte [SelectedPartition]
 	call	RenderMenu
 
 .waitForKeypress:
@@ -305,7 +324,6 @@ MainMenu:
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 .noBootablePartitions:
 	mov		bp, MsgNoPartitions
-	mov		cx, 42
 	mov		dx, 0x0B13
 	call	PrintString
 
@@ -316,20 +334,50 @@ MainMenu:
 ; Renders the options menu.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 OptionsMenu:
+	; Read the options strings table
+	mov		edi, OptionsMenuBuffer
+
+	; Clear EBX (loop counter)
+	xor		ebx, ebx
+
+.checkNextString:
+	; Is the first byte zero?
+	cmp		byte [ds:di], 0
+	je		.renderOptions
+
+	; Render the checkmark
+	mov		dword [ds:di], '[ ] '
+
+	; check the bit: is it set?
+	bt		dword [gs:DataStruct_BootFlags], ebx
+	jnc		.notSet
+
+	mov		byte [ds:di+1], 0x2a
+
+.notSet:
+	; How long is this string?
+	mov		bp, di
+	call	strlen
+
+	; Skip over the entire length of the string
+	add		di, cx
+
+	; Process the next string.
+	inc		bl
+	jmp		.checkNextString
 
 .renderOptions:
 	; Clear screen
 	mov		ax, 0x0003
 	int		0x10
 
-	; Hide Cursor
-	mov		ah, 0x01
-	mov		cx, 0x2607
+	; Set background colour
+	mov		ah, 0x0b
+	mov		bx, Colour_MenuBG
 	int		0x10
 
 	; Print title
 	mov		bp, MsgOptionsTitle
-	mov		cx, 18
 	mov		dx, 0x011F
 	call	PrintString
 
@@ -338,14 +386,21 @@ OptionsMenu:
 
 	; Print advice
 	mov		bp, MsgOptionsAdvice1
-	mov		cx, 36
 	mov		dx, 0x1516
 	call	PrintString
 
 	mov		bp, MsgOptionsAdvice2
-	mov		cx, 66
 	mov		dx, 0x1607
 	call	PrintString
+
+	; Render the menu contents
+	mov		ebp, OptionsMenuBuffer
+	mov		al, byte [SelectedOption]
+	mov		ah, OptionsMenu_NumItems
+	call	RenderMenu
+
+	; Update cursor
+	call	.updateCursorPosition
 
 .waitForKeypress:
 	; wait for a keypress
@@ -378,24 +433,46 @@ OptionsMenu:
 
 	; If not, move up one space.
 	sub		byte [SelectedOption], 0x01
+
+	call	.updateCursorPosition
 	jmp		.renderOptions
 
 ; Process an down arrow press.
 .downArrow:
 	; Are we at the bottom?
-	mov		al, byte [NumberOfOptions]
-	dec		al
+	mov		al, (OptionsMenu_NumItems - 1)
 	cmp		byte [SelectedOption], al
 	je		.renderOptions
 
 	; If not, go down one entry.
 	add		byte [SelectedOption], 0x01
+
+	call	.updateCursorPosition
 	jmp		.renderOptions
 
 ; Process a press of the space bar: toggle the currently selected option.
 .spaceKey:
+	xor		eax, eax
+	mov		al, byte [SelectedOption]
+	btc		dword [gs:DataStruct_BootFlags], eax
+
 	; Since we changed the options, recalculate strings
 	jmp		OptionsMenu
+
+; Updates the cursor position
+.updateCursorPosition:
+	; Get the Y
+	mov		dh, byte [SelectedOption]
+	add		dh, 5
+
+	; Set X and page, then update
+	mov		dl, 6
+	xor		bx, bx
+
+	mov		ah, 0x02
+	int		0x10
+
+	ret
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Boots the selected partition. Determines whether it is a Plonk partition, or
@@ -457,7 +534,6 @@ BootPlonk:
 
 	; Print string
 	mov		bp, MsgLoadingKernel
-	mov		cx, 20
 	xor		dx, dx
 	call	PrintString
 
@@ -513,9 +589,9 @@ RenderMenu:
 	; Save the attribute used to render
 	mov		byte [RenderMenu_FillSpaceAttr], bl
 
-	; Fill in the string length and coordinate
-	xor		cx, cx
-	mov		cl, 0x20
+	; Get the string length
+	call	strlen
+	mov		byte [RenderMenu_Length], cl
 
 	; Video page 0
 	xor		bh, bh
@@ -539,13 +615,14 @@ RenderMenu:
 	pop		dx
 	pop		bx
 
-	; Pad the total number of chars to 69
-	mov		al, 71
-	sub		al, bh
+	; Pad the total number of chars to 71
+	mov		al, 70
+	sub		al, byte [RenderMenu_Length]
 	jz		.rowFilled
 
 	; Increment the X coordinate by the number of bytes written
-	add		cl, bh
+	add		cl, byte [RenderMenu_Length]
+	inc		cl
 
 	; Render AX additional characters.
 	call	RenderMenu_FillSpace
@@ -600,6 +677,8 @@ RenderMenu_FillSpace:
 	ret
 
 RenderMenu_FillSpaceAttr:
+	db		0
+RenderMenu_Length:
 	db		0
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -733,20 +812,38 @@ DrawContentBox:
 	db		0
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-; Prints the string in ES:BP (length CX bytes) to the screen. Cursor position
-; is in DX
+; Prints the string in ES:BP to the screen. Cursor position is in DX.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 PrintString:
-	; Video page 0, attribute 0: column 0
-	xor		bx, bx
-
 	; read attribute
 	mov		bl, [es:bp]
 	inc		bp
 
+	; Find string length
+	call	strlen
+
+	; Video page 0, attribute 0: column 0
+	xor		bh, bh
+
 	mov		ax, 0x1301
 	int		0x10
 
+	ret
+
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Determines the length of the string in ES:BP, and returns it in CX.
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+strlen:
+	xor		ecx, ecx
+
+.loop:
+	cmp		byte [es:ebp+ecx], 0
+	je		.done
+
+	inc		ecx
+	jmp		.loop
+
+.done
 	ret
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -761,7 +858,7 @@ CollectMemoryInfo:
 	mov		ax, 0xe881
 	int		0x15
 
-	; Did the BIOS output on EAX/EBX?
+	; Did the BIOS output on EAX/EBX? (or is it worthless shit)
 	test	eax, eax
 	jnz		.outputEAX
 
@@ -773,7 +870,7 @@ CollectMemoryInfo:
 	mov		dword [gs:DataStruct_LowMem], eax
 	mov		dword [gs:DataStruct_HighMem], ebx
 
-	;
+	; Collect memory map
 
 	ret
 
@@ -807,62 +904,6 @@ EnableA20:
 .A20AlreadyOn:
 	ret
 
-;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-; Checks if the A20 gate is enabled. AX is 0 if it is disabled, 1 otherwise.
-;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-;CheckA20:
-;	; Save the segments we are about to mess with
-;	push	fs
-;	push	es
-;
-;	; ES = 0x0000
-;	xor		ax, ax
-;	mov		es, ax
-;
-;	; DS = 0xffff
-;	not		ax
-;	mov		fs, ax
-;
-;	; Check the signatures
-;	mov		di, 0x0500
-;	mov		si, 0x0510
-;
-;	; Read 0x0000:0x0500
-;	mov		al, byte [es:di]
-;	push	ax
-;
-;	; Read 0xffff:0x0510
-;	mov		al, byte [fs:si]
-;	push	ax
-;
-;	; Write two different values to them
-;	mov		byte [es:di], 0x00
-;	mov		byte [fs:si], 0xFF
-;
-;	; Are they the same values?
-;	cmp		byte [es:di], 0xFF
-;
-;	; Write back the old values
-;	pop		ax
-;	mov		byte [fs:si], al
-;
-;	pop		ax
-;	mov		byte [es:di], al
-;
-;	; Clear AX: if the values are the same, return
-;	xor		ax, ax
-;	je		.done
-;
-;	; Otherwise, they're not
-;	mov		al, 1
-;
-;.done:
-;	; Pop the segments we messed with
-;	pop		es
-;	pop		fs
-;
-;	ret
-;
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Enters Unreal Mode.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -932,30 +973,41 @@ INT13_LoadPacket:
 	dd	0
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Options strings table. This is modified at runtime to include the checkmark
+; characters.
+;
+; It contains zero-terminated strings, and the table itself ends once the first
+; character of a string is a zero byte.
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+OptionsMenuBuffer:
+	db		"xxxxUse No eXecute bit", 0
+	db		0
+
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Message strings
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 MsgTitle: ; 24
-	db		Colour_Titles, "The Plonk Bootloader 1.0"
+	db		Colour_Titles, "The Plonk Bootloader 1.0", 0
 MsgAdvice1: ; 46
-	db		Colour_HelpText, "Use ", 0x18, " or ", 0x19, " keys to select an operating system."
+	db		Colour_HelpText, "Use ", 0x18, " or ", 0x19, " keys to select an operating system.", 0
 MsgAdvice2: ; 38
-	db		Colour_HelpText, "Press ENTER to boot, or O for options."
+	db		Colour_HelpText, "Press ENTER to boot, or O for options.", 0
 
 MsgOptionsTitle: ; 18
-	db		Colour_Titles, "Plonk Boot Options"
+	db		Colour_Titles, "Plonk Boot Options", 0
 MsgOptionsAdvice1: ; 36
-	db		Colour_HelpText, "Use ", 0x18, " or ", 0x19, " keys to select an option."
+	db		Colour_HelpText, "Use ", 0x18, " or ", 0x19, " keys to select an option.", 0
 MsgOptionsAdvice2: ; 66
-	db		Colour_HelpText, "Press SPACE to toggle an option, and ESC to exit to the main menu."
+	db		Colour_HelpText, "Press SPACE to toggle an option, and ESC to exit to the main menu.", 0
 
 MsgNoPartitions: ; 42
-	db		Colour_ErrorText, "This disk contains no bootable partitions."
+	db		Colour_ErrorText, "This disk contains no bootable partitions.", 0
 
 MsgLoadingKernel: ; 20
-	db		Colour_ProgressText, "Loading Plonk kernel"
+	db		Colour_ProgressText, "Loading Plonk kernel", 0
 MsgLoadingRamFS: ; 23
-	db		Colour_ProgressText, "Loading initial modules"
+	db		Colour_ProgressText, "Loading initial modules", 0
 MsgLoadingParsing: ; 18
-	db		Colour_ProgressText, "Parsing Executables"
+	db		Colour_ProgressText, "Parsing executables", 0
 MsgLoadingBooting: ; 14
-	db		Colour_ProgressText, "Booting kernel"
+	db		Colour_ProgressText, "Booting kernel", 0

@@ -18,8 +18,10 @@ DataStruct_Offset			EQU 0x0000
 DataStruct_Size				EQU 0xFFFF
 
 ; These are offsets within the structure itself
-DataStruct_BootDrive		EQU 0x0000
-DataStruct_BootPartLBA		EQU 0x0001
+DataStruct_BootFlags		EQU 0x0000
+
+DataStruct_BootDrive		EQU 0x0004
+DataStruct_BootPartLBA		EQU 0x0005
 
 ; Segment of the stage 2 loader
 Stage2_Segment				EQU 0x0000
