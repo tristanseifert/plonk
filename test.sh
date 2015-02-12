@@ -14,8 +14,12 @@ dd conv=notrunc if=boot/out/mbr.bin of=./disk.img count=446 bs=1
 dd conv=notrunc if=boot/out/stage1.bin of=./disk.img count=3 bs=1 seek=512
 dd conv=notrunc if=boot/out/stage1.bin of=./disk.img count=448 bs=1 seek=616 skip=104
 
+dd conv=notrunc if=boot/out/stage1.bin of=./disk.img count=3 bs=1 seek=$((512+3584))
+dd conv=notrunc if=boot/out/stage1.bin of=./disk.img count=448 bs=1 seek=$((616+3584)) skip=104
+
 # Copy stage 2 (at sector 2 of FAT)
-dd conv=notrunc if=boot/out/stage2.bin of=./disk.img count=2048 bs=1 seek=1536
+dd conv=notrunc if=boot/out/stage2.bin of=./disk.img count=2560 bs=1 seek=1536
+dd conv=notrunc if=boot/out/stage2.bin of=./disk.img count=2560 bs=1 seek=$((1536+3584))
 
 # Launch qemu
 qemu-system-i386 -hda disk.img -m 256M -vga std -soundhw sb16 -net nic,model=e1000 -net user -cpu pentium3 -rtc base=utc -monitor stdio -s
