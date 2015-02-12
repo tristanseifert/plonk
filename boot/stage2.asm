@@ -14,6 +14,21 @@
 [BITS 16]
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Some configuration
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Colour_ContentBox			EQU 0x07
+
+Colour_SelectedListItem		EQU 0x70
+Colour_NormalListItem		EQU 0x07
+
+Colour_HelpText				EQU 0x07
+Colour_ProgressText			EQU 0x07
+Colour_ErrorText			EQU 0x04
+
+Colour_TextField			EQU 0x07
+Colour_Titles				EQU 0x70
+
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Fields in the kernel info structure. It is located at 0x070000 in physical
 ; memory.
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -37,6 +52,9 @@ SelectedPartition			EQU ParamBase+0x0000 ; index of MBR, 0-3
 BootablePartitions			EQU ParamBase+0x0001 ; Number of bootable partitions.
 PartitionFlags				EQU ParamBase+0x0002 ; One byte per partition
 BootPartMap					EQU	ParamBase+0x0006 ; 32 bytes per partition, string
+
+SelectedOption				EQU ParamBase+0x0086 ; Currently selected option
+NumberOfOptions				EQU ParamBase+0x0087 ; Number of options
 
 SectorBuffer_Offset			EQU	0xF800 ; 2K buffer for sectors
 SectorBuffer_Segment		EQU 0x0000
@@ -242,7 +260,11 @@ MainMenu:
 
 	; Was it the enter key?
 	cmp		ah, 0x1C
-	je		BootPartition
+	je		.boot
+
+	; Was it the 'O' key?
+	cmp		ah, 0x18
+	je		.showOptions
 
 	jmp		MainMenu
 
@@ -268,6 +290,15 @@ MainMenu:
 	add		byte [SelectedPartition], 0x01
 	jmp		MainMenu
 
+; Enters the options menu
+.showOptions:
+	mov		byte [SelectedOption], 0x00
+	jmp		OptionsMenu
+
+; Boots the selected partition.
+.boot:
+	jmp		BootPartition
+
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Displays a message that there are no bootable partitions, then waits for the
 ; user to press CTRL+ALT+DEL.
@@ -280,6 +311,91 @@ MainMenu:
 
 	sti
 	jmp		$
+
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Renders the options menu.
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+OptionsMenu:
+
+.renderOptions:
+	; Clear screen
+	mov		ax, 0x0003
+	int		0x10
+
+	; Hide Cursor
+	mov		ah, 0x01
+	mov		cx, 0x2607
+	int		0x10
+
+	; Print title
+	mov		bp, MsgOptionsTitle
+	mov		cx, 18
+	mov		dx, 0x011F
+	call	PrintString
+
+	; Draw content box holder thing
+	call	DrawContentBox
+
+	; Print advice
+	mov		bp, MsgOptionsAdvice1
+	mov		cx, 36
+	mov		dx, 0x1516
+	call	PrintString
+
+	mov		bp, MsgOptionsAdvice2
+	mov		cx, 66
+	mov		dx, 0x1607
+	call	PrintString
+
+.waitForKeypress:
+	; wait for a keypress
+	xor		ah, ah
+	int		0x16
+
+	; Was it an up arrow?
+	cmp		ah, 0x48
+	je		.upArrow
+
+	; Was it a down arrow?
+	cmp		ah, 0x50
+	je		.downArrow
+
+	; Was it the SPACE key?
+	cmp		ah, 0x39
+	je		.spaceKey
+
+	; Was it the ESC key?
+	cmp		ah, 0x01
+	je		MainMenu
+
+	jmp		OptionsMenu
+
+; Process an up arrow press.
+.upArrow:
+	; Are we at the top?
+	cmp		byte [SelectedOption], 0x00
+	je		.renderOptions
+
+	; If not, move up one space.
+	sub		byte [SelectedOption], 0x01
+	jmp		.renderOptions
+
+; Process an down arrow press.
+.downArrow:
+	; Are we at the bottom?
+	mov		al, byte [NumberOfOptions]
+	dec		al
+	cmp		byte [SelectedOption], al
+	je		.renderOptions
+
+	; If not, go down one entry.
+	add		byte [SelectedOption], 0x01
+	jmp		.renderOptions
+
+; Process a press of the space bar: toggle the currently selected option.
+.spaceKey:
+	; Since we changed the options, recalculate strings
+	jmp		OptionsMenu
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Boots the selected partition. Determines whether it is a Plonk partition, or
@@ -372,7 +488,7 @@ RenderMenu:
 	push	bx
 
 	; Regular colour
-	mov		bl, 0x07
+	mov		bl, Colour_NormalListItem
 
 	; If ToHighlight == Current, highlight the row.
 	sub		al, dl
@@ -386,8 +502,8 @@ RenderMenu:
 	jmp		.renderString
 
 .highlight:
-	; Inverted colours
-	rol		bl, 0x4
+	; Use the highlight colours
+	mov		bl, Colour_SelectedListItem
 
 	; Increment & save current index
 	inc		dl
@@ -499,7 +615,7 @@ DrawContentBox:
 	int		0x10
 
 	mov		al, 0xC9
-	mov		bx, 0x000F
+	mov		bx, Colour_ContentBox
 	mov		cx, 0x0001
 
 	mov		ah, 0x09
@@ -512,7 +628,7 @@ DrawContentBox:
 	int		0x10
 
 	mov		al, 0xCD
-	mov		bx, 0x000F
+	mov		bx, Colour_ContentBox
 	mov		cx, 0x0046
 
 	mov		ah, 0x09
@@ -525,7 +641,7 @@ DrawContentBox:
 	int		0x10
 
 	mov		al, 0xBB
-	mov		bx, 0x000F
+	mov		bx, Colour_ContentBox
 	mov		cx, 0x0001
 
 	mov		ah, 0x09
@@ -540,7 +656,7 @@ DrawContentBox:
 	int		0x10
 
 	mov		al, 0xC8
-	mov		bx, 0x000F
+	mov		bx, Colour_ContentBox
 	mov		cx, 0x0001
 
 	mov		ah, 0x09
@@ -553,7 +669,7 @@ DrawContentBox:
 	int		0x10
 
 	mov		al, 0xCD
-	mov		bx, 0x000F
+	mov		bx, Colour_ContentBox
 	mov		cx, 0x0046
 
 	mov		ah, 0x09
@@ -566,7 +682,7 @@ DrawContentBox:
 	int		0x10
 
 	mov		al, 0xBC
-	mov		bx, 0x000F
+	mov		bx, Colour_ContentBox
 	mov		cx, 0x0001
 
 	mov		ah, 0x09
@@ -587,7 +703,7 @@ DrawContentBox:
 	int		0x10
 
 	mov		al, 0xBA
-	mov		bx, 0x000F
+	mov		bx, Colour_ContentBox
 	mov		cx, 0x0001
 	mov		ah, 0x09
 	int		0x10
@@ -600,7 +716,7 @@ DrawContentBox:
 	int		0x10
 
 	mov		al, 0xBA
-	mov		bx, 0x000F
+	mov		bx, Colour_ContentBox
 	mov		cx, 0x0001
 	mov		ah, 0x09
 	int		0x10
@@ -819,21 +935,27 @@ INT13_LoadPacket:
 ; Message strings
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 MsgTitle: ; 24
-	db		0x70, "The Plonk Bootloader 1.0"
-
+	db		Colour_Titles, "The Plonk Bootloader 1.0"
 MsgAdvice1: ; 46
-	db		0x07, "Use ", 0x18, " or ", 0x19, " keys to select an operating system."
+	db		Colour_HelpText, "Use ", 0x18, " or ", 0x19, " keys to select an operating system."
 MsgAdvice2: ; 38
-	db		0x07, "Press ENTER to boot, or O for options."
+	db		Colour_HelpText, "Press ENTER to boot, or O for options."
+
+MsgOptionsTitle: ; 18
+	db		Colour_Titles, "Plonk Boot Options"
+MsgOptionsAdvice1: ; 36
+	db		Colour_HelpText, "Use ", 0x18, " or ", 0x19, " keys to select an option."
+MsgOptionsAdvice2: ; 66
+	db		Colour_HelpText, "Press SPACE to toggle an option, and ESC to exit to the main menu."
 
 MsgNoPartitions: ; 42
-	db		0x04, "This disk contains no bootable partitions."
+	db		Colour_ErrorText, "This disk contains no bootable partitions."
 
 MsgLoadingKernel: ; 20
-	db		0x07, "Loading Plonk kernel"
+	db		Colour_ProgressText, "Loading Plonk kernel"
 MsgLoadingRamFS: ; 23
-	db		0x07, "Loading initial modules"
+	db		Colour_ProgressText, "Loading initial modules"
 MsgLoadingParsing: ; 18
-	db		0x07, "Parsing Executables"
+	db		Colour_ProgressText, "Parsing Executables"
 MsgLoadingBooting: ; 14
-	db		0x07, "Booting kernel"
+	db		Colour_ProgressText, "Booting kernel"
