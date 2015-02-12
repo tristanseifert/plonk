@@ -3,7 +3,8 @@
 
 #include "stdio.h"
 #include "stdbool.h"
-#include "num.h"
+#include "stdlib.h"
+#include "string.h"
 
 int snprintf(char *s, size_t n, const char *format, ...) {
 
@@ -16,9 +17,8 @@ int snprintf(char *s, size_t n, const char *format, ...) {
     // varible to know if we're at a placeholder
     bool control = false;
 
-    int i;
-    for(i = 0; i < (int) n; i++) {
-        c = *current++;
+    int i = 0;
+    while((c = *current++) != 0 && i < (int) n) {
         
         if(control == true) {
             control = false;
@@ -26,12 +26,20 @@ int snprintf(char *s, size_t n, const char *format, ...) {
             // switch on the format thing
             switch(c) {
                 case '%':
-                    s[i] = c;
+                    s[i++] = c;
                     break;
                 case 'd': {
                     // XXX: implement signed ints
                     int arg = va_arg(vl, int);
-                    s[i] = itoa(arg, 10);
+                    char *buf = itoa(arg, 10);
+                    int size = (int) strlen(buf);
+
+                    int j;
+                    // XXX: Make sure we don't go over n when copying.
+                    for(j = 0; j < size; j++) {
+                        s[i++] = buf[j];
+                    }
+
                     break;
                 } default:
                     // XXX: implement everything else
@@ -42,7 +50,7 @@ int snprintf(char *s, size_t n, const char *format, ...) {
             control = true;
 
         } else {
-            s[i] = c;
+            s[i++] = c;
         }
     }
 
