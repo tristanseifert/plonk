@@ -18,8 +18,6 @@ char *strncpy(char *dest, const char *src, size_t n);
 
 char *strcat(char *dest, const char *src);
 
-long strtol(const char *nptr, char **endptr, int base);
-
 // memory-related
 int memcmp(const void* ptr1, const void* ptr2, size_t num);
 void* memchr(void* ptr, uint8_t value, size_t num);
