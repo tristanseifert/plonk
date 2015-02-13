@@ -28,13 +28,22 @@ int snprintf(char *s, size_t n, const char *format, ...) {
                     s[i++] = c;
                     break;
                 case 'd': {
-                    // XXX: implement signed ints
                     int arg = va_arg(vl, int);
+
+                    // Support for signed ints
+                    if(arg < 0) {
+                        arg = (arg ^ -1) + 1;
+                        s[i++] = arg;
+                    }
+
                     char *buf = itoa(arg, 10);
                     int size = (int) strlen(buf);
 
                     int j;
-                    // XXX: Make sure we don't go over n when copying.
+
+                    if(size + i < (int) n) // Make sure we dont overflow the buf.
+                        size = (int) n;
+
                     for(j = 0; j < size; j++) {
                         s[i++] = buf[j];
                     }
