@@ -1,6 +1,7 @@
-#include <stdint.h>
-
+#include "stdint.h"
 #include "string.h"
+#include "stdlib.h"
+#include "limits.h"
 
 /**
  * Counts the number of characters (that is, single-byte characters: this is a
@@ -287,7 +288,7 @@ long strtol(const char *nptr, char **endptr, int base) {
 void* memchr(void* ptr, uint8_t value, size_t num) {
     uint8_t *read = (uint8_t *) ptr;
 
-    for(int i = 0; i < num; i++) {
+    for(int i = 0; i < (int) num; i++) {
         if(read[i] == value) return &read[i];
     }
 
@@ -304,7 +305,7 @@ int memcmp(const void* ptr1, const void* ptr2, size_t num) {
     uint8_t *read1 = (uint8_t *) ptr1;
     uint8_t *read2 = (uint8_t *) ptr2;
 
-    for(int i = 0; i < num; i++) {
+    for(int i = 0; i < (int) num; i++) {
         if(read1[i] != read2[i]) {
             if(read1[i] > read2[i]) return 1;
             else return -1;
@@ -325,7 +326,7 @@ void* memset(void* ptr, uint8_t value, size_t num) {
 
     uint8_t *write = (uint8_t *) ptr;
 
-    for(int i = 0; i < num; i++) {
+    for(int i = 0; i < (int) num; i++) {
         write[i] = value;
     }
 
