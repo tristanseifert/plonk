@@ -16,9 +16,13 @@
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Some configuration
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ColourScheme				EQU 1
+
+; Grey on black
+%if ColourScheme = 0
 Colour_ContentBox			EQU 0x07
 
-Colour_MenuBG				EQU 0x01
+Colour_MenuBG				EQU 0x00
 
 Colour_SelectedListItem		EQU 0x70
 Colour_NormalListItem		EQU 0x07
@@ -29,6 +33,23 @@ Colour_ErrorText			EQU 0x04
 
 Colour_TextField			EQU 0x07
 Colour_Titles				EQU 0x70
+
+; White on light blue
+%else
+Colour_ContentBox			EQU 0x0F
+
+Colour_MenuBG				EQU 0x09
+
+Colour_SelectedListItem		EQU 0xF0
+Colour_NormalListItem		EQU 0x0F
+
+Colour_HelpText				EQU 0x0f
+Colour_ProgressText			EQU 0x0F
+Colour_ErrorText			EQU 0x04
+
+Colour_TextField			EQU 0x0F
+Colour_Titles				EQU 0xF0
+%endif
 
 OptionsMenu_ItemLength		EQU 32
 OptionsMenu_NumItems		EQU 1
