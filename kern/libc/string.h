@@ -25,5 +25,6 @@ int memcmp(const void* ptr1, const void* ptr2, size_t num);
 void* memchr(void* ptr, uint8_t value, size_t num);
 
 void* memset(void* ptr, uint8_t value, size_t num);
+void* memclr(void* ptr, size_t num);
 
 #endif

@@ -4,6 +4,27 @@
 #include "limits.h"
 
 /**
+ * Various macros for determining the type of character passed in. This assumes
+ * single byte ASCII characters.
+ */
+#define isalnum(c) (isalpha(c) || isdigit(c))
+#define isalpha(c) (islower(c) || isupper(c))
+#define isblank(c) ((c) == ' ' || (c) == '\t')
+#define iscntrl(c) ((c) >= 0x0 && (c) <= 0x8)
+#define isdigit(c) ((c) >= '0' && (c) <= '9')
+#define isgraph(c) (ispunct(c) || isalnum(c))
+#define islower(c) ((c) >= 'a' && (c) <= 'z')
+#define isprint(c) (isgraph(c) || isspace(c))
+#define ispunct(c) (((c) >= 0x21 && (c) <= 0x2F) || ((c) >= 0x3A && (c) <= 0x40)\
+                    || ((c) >= 0x5B && (c) <= 0x60) || ((c) >= 0x7B && (c) <= 0x7E))
+#define isspace(c) ((c) == ' ' || (c) == '\t' || (c) == '\r' || (c) == '\n' ||\
+                    (c) == '\f' || (c) == '\v')
+#define isupper(c) ((c) >= 'A' && (c) <= 'Z')
+#define isxdigit(c) (isdigit(c) || ((c) >= 'a' && (c) <= 'f') || ((c) >= 'A' && (c) <= 'F'))
+#define tolower(c) (isupper(c) ? ((c) + 'a' - 'A') : (c))
+#define toupper(c) (islower(c) ? ((c) + 'A' - 'a') : (c))
+
+/**
  * Counts the number of characters (that is, single-byte characters: this is a
  * single character in ASCII) in a string.
  */
@@ -320,7 +341,7 @@ int memcmp(const void* ptr1, const void* ptr2, size_t num) {
  */
 void* memset(void* ptr, uint8_t value, size_t num) {
     // make zero fills faster
-    if(unlikely(value == 0x00)) {
+    if(value == 0x00) {
         return memclr(ptr, num);
     }
 
@@ -328,6 +349,19 @@ void* memset(void* ptr, uint8_t value, size_t num) {
 
     for(int i = 0; i < (int) num; i++) {
         write[i] = value;
+    }
+
+    return ptr;
+}
+
+/**
+ * Fills a given segment of memory with zero.
+ */
+void* memclr(void* ptr, size_t num) {
+    uint8_t *write = (uint8_t *) ptr;
+
+    for(int i = 0; i < (int) num; i++) {
+        write[i] = 0;
     }
 
     return ptr;
