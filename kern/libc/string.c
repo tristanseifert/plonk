@@ -31,7 +31,7 @@
 size_t strlen(const char *str) {
     size_t ret = 0;
     
-    while (str[ret] != 0x00) {
+    while(str[ret] != 0x00) {
         ret++;
     }
     
@@ -88,12 +88,15 @@ cont:
 /*
  * Returns a pointer to the first occurrence of character c in string s.
  */
-char* strchr(const char *s, int c) {
+char* strchr(const char *s, register char c) {
     const char ch = c;
 
-    for ( ; *s != ch; s++)
-        if (*s == '\0')
+    for ( ; *s != ch; s++) {
+        if (*s == '\0') {
             return NULL;
+        }
+    }
+    
     return (char *) s;
 }
 
@@ -140,7 +143,7 @@ char* strsep(char **stringp, const char *delim) {
  * Compares two strings.
  */
 int strcmp(const char* s1, const char* s2) {
-    while(*s1 && (*s1==*s2)) {
+    while {
         s1++, s2++;
     }
 
@@ -150,12 +153,12 @@ int strcmp(const char* s1, const char* s2) {
 /*
  * Compares n bytes of the two strings.
  */
-int strncmp(const char* s1, const char* s2, size_t n) {
-    while(n--) {
-        if(*s1++!=*s2++) {
+int strncmp(const char* s1, const char* s2, register size_t n) {
+    do {
+        if(*s1++ != *s2++) {
             return *(unsigned char*)(s1 - 1) - *(unsigned char*)(s2 - 1);
         }
-    }
+    } while(n--);
     
     return 0;
 }
@@ -176,7 +179,7 @@ char *strcpy(char *dest, const char* src) {
  * Copies n bytes from the source string to the destination buffer, filling the
  * destination with zeros if source ends prematurely.
  */
-char *strncpy(char *dest, const char *src, size_t n) {
+char *strncpy(char *dest, const register char *src, register size_t n) {
     char *ret = dest;
     do {
         if (!n--) {
@@ -210,12 +213,15 @@ char *strcat(char *dest, const char *src) {
 /*
  * Finds the first occurrence of value in the first num bytes of ptr.
  */
-void* memchr(void* ptr, uint8_t value, size_t num) {
-    uint8_t *read = (uint8_t *) ptr;
+void* memchr(void* ptr, register uint8_t value, register size_t num) {
+    register unsigned char *read = (unsigned char *) ptr;
 
-    for(int i = 0; i < (int) num; i++) {
-        if(read[i] == value) return &read[i];
-    }
+    do {
+        // do the bytes match?
+        if(*read++ == value) {
+            return (read - 1);
+        }
+    } while(num-- != 0);
 
     return NULL;
 }
@@ -226,16 +232,24 @@ void* memchr(void* ptr, uint8_t value, size_t num) {
  * greater than the first byte in ptr2; and a value less than zero if the
  * opposite. Note that these comparisons are performed on uint8_t types.
  */
-int memcmp(const void* ptr1, const void* ptr2, size_t num) {
-    uint8_t *read1 = (uint8_t *) ptr1;
-    uint8_t *read2 = (uint8_t *) ptr2;
+int memcmp(const void* ptr1, const void* ptr2, register size_t num) {
+    register unsigned char *read1 = (unsigned char *) ptr1;
+    register unsigned char *read2 = (unsigned char *) ptr2;
 
-    for(int i = 0; i < (int) num; i++) {
-        if(read1[i] != read2[i]) {
-            if(read1[i] > read2[i]) return 1;
-            else return -1;
+    do {
+        // are the bytes not the same?
+        if(*read1 != *read2) {
+            if(*read1 > *read2) {
+                return 1;    
+            } else {
+                return -1;
+            }
         }
-    }
+
+        // increment the pointers
+        read1++;
+        read2++;
+    } while(num-- != 0);
 
     return 0;
 }
@@ -243,17 +257,17 @@ int memcmp(const void* ptr1, const void* ptr2, size_t num) {
 /*
  * Fills a given segment of memory with a specified value.
  */
-void* memset(void* ptr, uint8_t value, size_t num) {
+void* memset(void* ptr, register uint8_t value, register size_t num) {
     // make zero fills faster
     if(value == 0x00) {
         return memclr(ptr, num);
     }
 
-    uint8_t *write = (uint8_t *) ptr;
+    register unsigned char *write = (unsigned char *) ptr;
 
-    for(int i = 0; i < (int) num; i++) {
-        write[i] = value;
-    }
+    do {
+        *write++ = value;
+    } while(num-- != 0);
 
     return ptr;
 }
@@ -261,12 +275,39 @@ void* memset(void* ptr, uint8_t value, size_t num) {
 /**
  * Fills a given segment of memory with zero.
  */
-void* memclr(void* ptr, size_t num) {
-    uint8_t *write = (uint8_t *) ptr;
+void* memclr(void* ptr, register size_t num) {
+    register unsigned char *write = (unsigned char *) ptr;
 
-    for(int i = 0; i < (int) num; i++) {
-        write[i] = 0;
-    }
+    do {
+         *write++ = 0;
+    } while(num-- != 0);
 
     return ptr;
+}
+
+/*
+ * Copies num bytes from source to destination.
+ */
+void* memcpy(void* destination, void* source, size_t num) {
+    // Make sure that we don't try to null length bytes
+    if(num) {
+        // Keep the pointers in registers to optimise accesses.
+        register unsigned char *tp = destination;
+        register const unsigned char *fp = source;
+
+        do {
+            *tp++ = *fp++;
+        } while (--num != 0);
+    }
+
+    // We are done.
+    return destination;
+}
+
+void *memmove(void *dest, const void *src, size_t n) {
+    uint8_t tmp[n];
+    memcpy(tmp, (void *) src, n);
+    memcpy(dest, tmp, n);
+
+    return dest;
 }

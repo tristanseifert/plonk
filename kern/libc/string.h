@@ -25,4 +25,7 @@ void* memchr(void* ptr, uint8_t value, size_t num);
 void* memset(void* ptr, uint8_t value, size_t num);
 void* memclr(void* ptr, size_t num);
 
+void* memcpy(void* destination, void* source, size_t num);
+void *memmove(void *dest, const void *src, size_t n);
+
 #endif

@@ -7,7 +7,6 @@
 #include "string.h"
 
 int snprintf(char *s, size_t n, const char *format, ...) {
-
     const char *current = format;
     char c;
 
