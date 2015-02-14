@@ -51,8 +51,7 @@ Colour_TextField			EQU 0x0F
 Colour_Titles				EQU 0xF0
 %endif
 
-OptionsMenu_ItemLength		EQU 32
-OptionsMenu_NumItems		EQU 1
+OptionsMenu_NumItems		EQU 2
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Fields in the kernel info structure. It is located at 0x070000 in physical
@@ -385,8 +384,9 @@ OptionsMenu:
 	mov		bp, di
 	call	strlen
 
-	; Skip over the entire length of the string
+	; Skip over the entire length of the string (add 1 for zero terminator)
 	add		di, cx
+	inc		di
 
 	; Process the next string.
 	inc		bl
@@ -616,6 +616,7 @@ RenderMenu:
 	mov		byte [RenderMenu_FillSpaceAttr], bl
 
 	; Get the string length
+	push	bp
 	call	strlen
 	mov		byte [RenderMenu_Length], cl
 
@@ -636,6 +637,14 @@ RenderMenu:
 
 	; Restore the X/Y start of this row
 	pop		cx
+
+	; Increment the string pointer
+	xor		ax, ax
+	mov		al, byte [RenderMenu_Length]
+	inc		ax
+
+	pop		bp
+	add		bp, ax
 
 	; Pop current index and bytes per item
 	pop		dx
@@ -672,6 +681,7 @@ RenderMenu:
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 RenderMenu_FillSpace:
 	; Save some state
+	push	bp
 	push	bx
 	push	dx
 	push	ax
@@ -699,6 +709,7 @@ RenderMenu_FillSpace:
 	; We're done. Restore the registers we clobbered.
 	pop		dx
 	pop		bx
+	pop		bp
 
 	ret
 
@@ -1024,6 +1035,7 @@ INT13_LoadPacket:
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 OptionsMenuBuffer:
 	db		"xxxxUse No eXecute bit", 0
+	db		"xxxxUse watermelon power amplification", 0
 	db		0
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
