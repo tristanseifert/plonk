@@ -70,10 +70,14 @@ DataStruct_BootPartLBA		EQU 0x0005
 DataStruct_LowMem			EQU 0x0009 ; 1M to 16M, in 1KB blocks
 DataStruct_HighMem			EQU 0x000D ; Above 16M, in 64K blocks
 
-DataStruct_VBEVersion		EQU 0x000D ; 16 bit
-DataStruct_VBEMemory		EQU 0x000F ; Total video memory, in 64K blocks
-DataStruct_VBEOEMStrings	EQU 0x0013 ; Pointer (segment:offset) to strings
+DataStruct_VBEVersion		EQU 0x0011 ; 16 bit
+DataStruct_VBEMemory		EQU 0x0013 ; Total video memory, in 64K blocks
+DataStruct_VBEOEMStrings	EQU 0x0017 ; Pointer (segment:offset) to strings
 									   ; Three \0-separated strings
+
+DataStruct_NumMemMap		EQU 0x001B
+; empty one-byte flag
+DataStruct_MemMap			EQU 0x001E ; 384 bytes
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Various variables that hold the state of the bootloader.
@@ -111,13 +115,15 @@ entry:
 	xor		ax, ax
 	mov		word [SelectedPartition], ax
 
-	; Enable A20 gate, then enter Unreal Mode™
+	; Enable A20 gate
 	call	EnableA20
-	call	EnterUnrealMode
 
 	; Collect a bunch of information that the kernel likes
 	call	CollectMemoryInfo
 	call	CollectVideoInfo
+
+	; Enter Unreal Mode™
+	call	EnterUnrealMode
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ; Parses the MBR for partitions.
@@ -907,8 +913,100 @@ CollectMemoryInfo:
 	mov		dword [gs:DataStruct_LowMem], eax
 	mov		dword [gs:DataStruct_HighMem], ebx
 
-	; Collect memory map
+	; Set up ES:DI to point to the memory map structure
+	mov		ax, DataStruct_Segment
+	mov		es, ax
 
+	mov		di, DataStruct_Offset+DataStruct_MemMap
+
+	; Fetch the memory map itself
+	call	FetchE820MemoryMap	
+	jc		.e820Error
+
+	; Store entry count
+	mov		word [gs:DataStruct_NumMemMap], bp
+
+	xor		ax, ax
+	mov		es, ax
+	ret
+
+.e820Error:
+	jmp		$
+
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+; Collect memory map using 0xe820 function
+;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+FetchE820MemoryMap:
+	xor		ebx, ebx
+	xor		bp, bp									; keep an entry count in bp
+	mov		edx, 0x0534d4150
+	mov		eax, 0xe820
+
+	mov		[es:di + 20], dword 1					; force a valid ACPI 3.X entry
+	mov		ecx, 24									; ask for 24 bytes
+	int		0x15
+
+	; If carry was set after the first call, the function does not work
+	jc		short .failed
+	mov		edx, 0x0534D4150
+
+	; EAX == 'SMAP' on success
+	cmp		eax, edx		; on success, eax must have been reset to "SMAP"
+	jne		short .failed
+
+	; If the list is only one entry long, it failed and is worthless
+	test	ebx, ebx
+	je		short .failed
+
+	; Get the rest of the entries
+	jmp		short .jmpin
+
+.e820lp:
+	; EAX and ECX get trashed on every call, so recreate them
+	mov		eax, 0xe820
+	mov		[es:di + 20], dword 1
+	mov		ecx, 24
+	int		0x15
+
+	; If we have reached the end of the list, CF == 1
+	jc		short .listComplete
+	mov		edx, 0x0534d4150
+
+.jmpin:
+	; Skip zero-length entries
+	jcxz	.skipent
+
+	; Is this the regular 20-byte version?
+	cmp		cl, 20
+	jbe		short .notext
+
+	; Is the "ignore this entry" bit cleared?
+	test	byte [es:di + 20], 1	; if so: is the "ignore this data" bit clear?
+	je		short .skipent
+
+.notext:
+	; Is memory length zero?
+	mov		ecx, [es:di + 8]
+	or		ecx, [es:di + 12]
+	jz		.skipent
+
+	; We got a good entry, so increment the count
+	inc		bp
+	add		di, 24
+
+.skipent:
+	; If EBX resets to zero, the list is complete: otherwise, get remaining
+	test	ebx, ebx
+	jne		short .e820lp
+
+.listComplete:
+	; Clear carry flag
+	clc
+	ret
+
+.failed:
+	; Something failed, so set the carry flag.
+	stc
 	ret
 
 ;~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
