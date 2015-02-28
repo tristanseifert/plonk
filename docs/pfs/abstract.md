@@ -55,6 +55,8 @@ Instead of giving directories special treatment, they are stored in the same man
 
 These 'directory records' contain a variable-length zero-terminated filename, encoded using UTF-8, an inode number, and the total length of the record. Records are padded to be multiples of four bytes in size to ensure alignment on architectures that enforce it more strictly than x86.
 
+While there is no upper bound on the length of a filename, it must not be so long that the entry cannot fit into a single block. Directory entries cannot span more than one block. If it does not fit in an already used block, an additional block is allocated for holding that entry.
+
 ```c
 struct pfs_dirent {
 	unsigned int inode;
