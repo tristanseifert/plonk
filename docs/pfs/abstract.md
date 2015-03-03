@@ -76,3 +76,19 @@ For the most part, there are three types of information in the superblock:
 - Filesystem state: State that is updated every time the filesystem is mounted and manipulated. This can be used to determine the health of the filesystem, and provides useful statistics like mount and error counts.
 
 Additionally, the superblock provides the location of the root directory, which allows the filesystem to be traversed.
+
+## Caching
+PFS implements a relatively time since last used cache for file node lists. It does not cache files, blocks or directories—this is left up to the operating system to implement.
+
+Whenever a file is accessed, PFS needs to traverse the block list to find a given block, if a file cannot fit into the twelve blocks that the inode specifies. This additional read returns a block list, or another list structure that points to either another list or blocks, and with frequently accessed files, quickly becomes the bottleneck.
+
+These cached block lists are indexed by their physical block number, but this should not be misinterpreted—the cache only holds block lists, and shall not be used for anything else.
+
+Writes do not necessarily invalidate this cache. When a block is added to a file, the entry in the cache is used as the basis of the update, is modified, flushed to disk, and then added back to the cache. During modification and disk IO, the entry is invalidated, ensuring that any accesses to the file result in a wait for the write of the new block. Removals of files will always invalidate all blocks associated with them from the cache.
+
+### Size Management
+Periodically, or when the operating system is low on memory, the cache is trimmed by PFS. This is accomplished using a counter that each item contains. On every read, it is incremented, and is periodically reset.
+
+When trimming the cache, all entries with a counter that is still at its initial value (zero) are deleted. Then, the mean of all items is calculated, and the blocks in the least accessed 25% are deleted.
+
+This scheme is optimised to return memory in times of need, but also balances performance for normal desktop use. During compilation, this 'cacheability' value can be configured.
